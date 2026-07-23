@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# hermes-secure-update — secure update wrapper for Hermes Agent
+# Fetch → Verify → Review → Apply pipeline with human approval gate.
+#
+# Usage:
+#   hermes-secure-update [OPTIONS]
+#
+# Options:
+#   --dry-run       Fetch + verify + review only; do not apply
+#   --tag TAG       Update to a specific tag instead of main HEAD
+#   --auto          Skip approval prompt (for cron/gateway; respects risk threshold)
+#   --config FILE   Use alternate config file
+#   --verbose       Show full commit diff in review
+#   -h, --help      Show this help
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="$SCRIPT_DIR/../lib"
+CONFIG_FILE="${HERMES_SECURE_UPDATE_CONFIG:-$SCRIPT_DIR/../config/default.conf}"
+
+# ── Defaults (overridden by config) ──────────────────────────────────────────
+HERMES_REPO="${HERMES_HOME:-$HOME/.hermes}/hermes-agent"
+EXPECTED_REMOTE_PATTERN="github\.com[:/]NousResearch/hermes-agent(\.git)?$"
+AUTO_APPROVE_BELOW="low"
+BLOCK_ABOVE="high"
+SHOW_DIFF="true"
+PREFER_TAGS="false"
+KNOWN_MAINTAINERS_FILE="$SCRIPT_DIR/../config/maintainers.txt"
+
+# ── Parse args ───────────────────────────────────────────────────────────────
+DRY_RUN=false
+TARGET_TAG=""
+AUTO_APPROVE=false
+VERBOSE=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)   DRY_RUN=true; shift ;;
+    --tag)       TARGET_TAG="$2"; shift 2 ;;
+    --auto)      AUTO_APPROVE=true; shift ;;
+    --config)    CONFIG_FILE="$2"; shift 2 ;;
+    --verbose)   VERBOSE=true; shift ;;
+    -h|--help)
+      sed -n '2,/^set -euo/p' "$0" | grep '^#' | sed 's/^# \?//'
+      exit 0
+      ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
+# ── Load config ──────────────────────────────────────────────────────────────
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+fi
+
+# ── Source library modules ───────────────────────────────────────────────────
+source "$LIB_DIR/common.sh"
+source "$LIB_DIR/verify_remote.sh"
+source "$LIB_DIR/verify_signatures.sh"
+source "$LIB_DIR/risk_score.sh"
+source "$LIB_DIR/diff_summary.sh"
+
+# ── Main pipeline ────────────────────────────────────────────────────────────
+main() {
+  info "hermes-secure-update"
+  echo ""
+
+  # Phase 1: FETCH (read-only)
+  phase "1/4  FETCH"
+  do_fetch
+  echo ""
+
+  # Phase 2: VERIFY
+  phase "2/4  VERIFY"
+  do_verify
+  echo ""
+
+  # Phase 3: REVIEW
+  phase "3/4  REVIEW"
+  do_review
+  echo ""
+
+  # Phase 4: APPLY
+  if $DRY_RUN; then
+    info "Dry run — skipping apply."
+    exit 0
+  fi
+
+  phase "4/4  APPLY"
+  do_apply
+}
+
+# ── Phase 1: Fetch ───────────────────────────────────────────────────────────
+do_fetch() {
+  if [[ ! -d "$HERMES_REPO/.git" ]]; then
+    fail "Not a git repository: $HERMES_REPO"
+    exit 1
+  fi
+
+  # L1: Remote URL verification
+  verify_remote "$HERMES_REPO" "$EXPECTED_REMOTE_PATTERN"
+
+  info "Fetching from origin..."
+  if [[ -n "$TARGET_TAG" ]]; then
+    git -C "$HERMES_REPO" fetch origin --tags --quiet 2>/dev/null || true
+    if ! git -C "$HERMES_REPO" rev-parse "$TARGET_TAG" &>/dev/null; then
+      fail "Tag '$TARGET_TAG' not found."
+      exit 1
+    fi
+    TARGET_REF="$TARGET_TAG"
+  else
+    git -C "$HERMES_REPO" fetch origin main --quiet
+    TARGET_REF="origin/main"
+  fi
+
+  BEHIND=$(git -C "$HERMES_REPO" rev-list HEAD.."$TARGET_REF" --count 2>/dev/null || echo 0)
+  if [[ "$BEHIND" -eq 0 ]]; then
+    ok "Already up to date."
+    exit 0
+  fi
+
+  info "$BEHIND new commit(s) available."
+}
+
+# ── Phase 2: Verify ──────────────────────────────────────────────────────────
+do_verify() {
+  # L2: Commit signature verification
+  verify_signatures "$HERMES_REPO" "$TARGET_REF" "$KNOWN_MAINTAINERS_FILE"
+
+  # L3: Tag signature (if updating to a tag)
+  if [[ -n "$TARGET_TAG" ]]; then
+    verify_tag_signature "$HERMES_REPO" "$TARGET_TAG"
+  fi
+
+  # L4: Risk scoring
+  compute_risk "$HERMES_REPO" "$TARGET_REF"
+}
+
+# ── Phase 3: Review ──────────────────────────────────────────────────────────
+do_review() {
+  show_diff_summary "$HERMES_REPO" "$TARGET_REF" "$VERBOSE"
+
+  echo ""
+  echo "── Risk: $(risk_label) ──"
+
+  # Auto-approve logic
+  if $AUTO_APPROVE; then
+    local risk_level
+    risk_level=$(risk_level_numeric)
+    local threshold
+    threshold=$(risk_to_numeric "$AUTO_APPROVE_BELOW")
+    local block
+    block=$(risk_to_numeric "$BLOCK_ABOVE")
+
+    if [[ "$risk_level" -gt "$block" ]]; then
+      fail "Risk level $(risk_label) exceeds block threshold ($BLOCK_ABOVE). Aborting."
+      exit 1
+    fi
+    if [[ "$risk_level" -le "$threshold" ]]; then
+      ok "Auto-approved (risk $(risk_label) ≤ $AUTO_APPROVE_BELOW)."
+      return 0
+    fi
+    fail "Risk $(risk_label) > auto-approve threshold ($AUTO_APPROVE_BELOW). Needs manual approval."
+    exit 1
+  fi
+
+  # Interactive approval (skip in dry-run)
+  if $DRY_RUN; then
+    info "Dry run — skipping approval prompt."
+    return 0
+  fi
+
+  echo ""
+  read -rp "Apply this update? [y/N] " -n 1 reply
+  echo ""
+  if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+    info "Aborted."
+    exit 0
+  fi
+}
+
+# ── Phase 4: Apply ───────────────────────────────────────────────────────────
+do_apply() {
+  info "Applying update via hermes update..."
+  echo ""
+
+  if [[ -n "$TARGET_TAG" ]]; then
+    # Tag-pinned update: checkout tag, then let hermes update handle deps
+    git -C "$HERMES_REPO" checkout "$TARGET_TAG" --quiet
+    info "Checked out tag $TARGET_TAG. Running dependency sync..."
+    # hermes update will detect the checkout and sync deps
+    hermes update --yes
+  else
+    hermes update --yes
+  fi
+
+  echo ""
+  ok "Update complete."
+}
+
+main

@@ -1,0 +1,13 @@
+# Known Hermes Agent maintainers — commit authorship check.
+# One email per line. Lines starting with # are ignored.
+# Used by verify_signatures.sh to flag commits from unknown authors.
+
+# Core team (from git log analysis, July 2026)
+127238744+teknium1@users.noreply.github.com
+brooklyn.bb.nicholson@gmail.com
+arilotter@gmail.com
+yuntianqing@yahoo.com
+4317663+helix4u@users.noreply.github.com
+
+# Bots
+307254004+hermes-seaeye[bot]@users.noreply.github.com
