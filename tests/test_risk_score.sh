@@ -7,7 +7,7 @@ source "$SCRIPT_DIR/../lib/common.sh"
 source "$SCRIPT_DIR/../lib/risk_score.sh"
 
 TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+trap 'rm -rf "$TMPDIR" 2>/dev/null || true' EXIT
 
 PASS=0
 FAIL=0
@@ -45,7 +45,7 @@ make_repo_with_changes() {
 assert_risk() {
   local desc="$1" expected="$2" num_files="$3" touch_pyproject="${4:-false}"
 
-  local repo_name="risk_test_$(echo "$desc" | tr ' ' '_')"
+  local repo_name="risk_test_$(echo "$desc" | tr -c 'a-zA-Z0-9_' '_')"
   make_repo_with_changes "$repo_name" "$num_files" "$touch_pyproject"
 
   # Reset risk state
