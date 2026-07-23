@@ -11,6 +11,8 @@
 #   --auto          Skip approval prompt (for cron/gateway; respects risk threshold)
 #   --config FILE   Use alternate config file
 #   --verbose       Show full commit diff in review
+#   --ai-model M    Model for AI security review (default: config or hermes default)
+#   --no-ai-review  Skip AI security review
 #   -h, --help      Show this help
 set -euo pipefail
 
@@ -26,20 +28,29 @@ BLOCK_ABOVE="high"
 SHOW_DIFF="true"
 PREFER_TAGS="false"
 KNOWN_MAINTAINERS_FILE="$SCRIPT_DIR/../config/maintainers.txt"
+# AI review: model to use (empty = hermes default) and enable flag
+AI_REVIEW_MODEL=""
+AI_REVIEW_ENABLED="true"
+AI_REVIEW_MAX_DIFF_CHARS="12000"
+# When AI flags the diff as suspicious, block --auto and require explicit human yes
+AI_BLOCK_ON_SUSPICIOUS="true"
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 DRY_RUN=false
 TARGET_TAG=""
 AUTO_APPROVE=false
 VERBOSE=false
+AI_REVIEW_OVERRIDE=""   # "" = use config; "off" = --no-ai-review
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dry-run)   DRY_RUN=true; shift ;;
-    --tag)       TARGET_TAG="$2"; shift 2 ;;
-    --auto)      AUTO_APPROVE=true; shift ;;
-    --config)    CONFIG_FILE="$2"; shift 2 ;;
-    --verbose)   VERBOSE=true; shift ;;
+    --dry-run)      DRY_RUN=true; shift ;;
+    --tag)          TARGET_TAG="$2"; shift 2 ;;
+    --auto)         AUTO_APPROVE=true; shift ;;
+    --config)       CONFIG_FILE="$2"; shift 2 ;;
+    --verbose)      VERBOSE=true; shift ;;
+    --ai-model)     AI_REVIEW_MODEL="$2"; shift 2 ;;
+    --no-ai-review) AI_REVIEW_OVERRIDE="off"; shift ;;
     -h|--help)
       sed -n '2,/^set -euo/p' "$0" | grep '^#' | sed 's/^# \?//'
       exit 0
@@ -60,6 +71,15 @@ source "$LIB_DIR/verify_remote.sh"
 source "$LIB_DIR/verify_signatures.sh"
 source "$LIB_DIR/risk_score.sh"
 source "$LIB_DIR/diff_summary.sh"
+source "$LIB_DIR/ai_review.sh"
+
+# Resolve effective AI review enablement (CLI flag overrides config)
+ai_review_active() {
+  if [[ "$AI_REVIEW_OVERRIDE" == "off" ]]; then
+    return 1
+  fi
+  [[ "$AI_REVIEW_ENABLED" == "true" ]]
+}
 
 # ── Main pipeline ────────────────────────────────────────────────────────────
 main() {
@@ -67,27 +87,32 @@ main() {
   echo ""
 
   # Phase 1: FETCH (read-only)
-  phase "1/4  FETCH"
+  phase "1/5  FETCH"
   do_fetch
   echo ""
 
   # Phase 2: VERIFY
-  phase "2/4  VERIFY"
+  phase "2/5  VERIFY"
   do_verify
   echo ""
 
-  # Phase 3: REVIEW
-  phase "3/4  REVIEW"
+  # Phase 3: AI REVIEW
+  phase "3/5  AI REVIEW"
+  do_ai_review
+  echo ""
+
+  # Phase 4: REVIEW
+  phase "4/5  REVIEW"
   do_review
   echo ""
 
-  # Phase 4: APPLY
+  # Phase 5: APPLY
   if $DRY_RUN; then
     info "Dry run — skipping apply."
     exit 0
   fi
 
-  phase "4/4  APPLY"
+  phase "5/5  APPLY"
   do_apply
 }
 
@@ -137,15 +162,59 @@ do_verify() {
   compute_risk "$HERMES_REPO" "$TARGET_REF"
 }
 
-# ── Phase 3: Review ──────────────────────────────────────────────────────────
+# ── Phase 3: AI Review ───────────────────────────────────────────────────────
+do_ai_review() {
+  if ! ai_review_active; then
+    info "AI review disabled (--no-ai-review or config)."
+    _AI_REVIEW_RESULT="skipped"
+    return 0
+  fi
+
+  ai_review "$HERMES_REPO" "$TARGET_REF" "$AI_REVIEW_MODEL" "$AI_REVIEW_MAX_DIFF_CHARS"
+
+  # Surface the verdict for the approval gate
+  local verdict
+  verdict=$(ai_review_verdict)
+  case "$verdict" in
+    suspicious)
+      fail "AI flagged this diff as SUSPICIOUS."
+      ;;
+    review_needed)
+      warn "AI recommends REVIEW NEEDED for this diff."
+      ;;
+    clean)
+      ok "AI review: no security concerns."
+      ;;
+    *)
+      info "AI review: no verdict available."
+      ;;
+  esac
+}
+
+# ── Phase 4: Review ──────────────────────────────────────────────────────────
 do_review() {
   show_diff_summary "$HERMES_REPO" "$TARGET_REF" "$VERBOSE"
 
   echo ""
   echo "── Risk: $(risk_label) ──"
 
+  # AI verdict (empty/unknown/skipped when AI review is off)
+  local ai_verdict
+  ai_verdict=$(ai_review_verdict)
+  local ai_suspicious=false
+  if [[ "$ai_verdict" == "suspicious" && "$AI_BLOCK_ON_SUSPICIOUS" == "true" ]]; then
+    ai_suspicious=true
+  fi
+
   # Auto-approve logic
   if $AUTO_APPROVE; then
+    # AI suspicious always blocks --auto (no unattended apply of flagged diffs)
+    if $ai_suspicious; then
+      fail "AI flagged diff as SUSPICIOUS — refusing unattended apply."
+      fail "Run interactively to review: hermes-secure-update"
+      exit 1
+    fi
+
     local risk_level
     risk_level=$(risk_level_numeric)
     local threshold
@@ -172,7 +241,12 @@ do_review() {
   fi
 
   echo ""
-  read -rp "Apply this update? [y/N] " -n 1 reply
+  if $ai_suspicious; then
+    warn "AI flagged this diff as SUSPICIOUS. Review the AI output above carefully."
+    read -rp "Apply ANYWAY despite AI warning? [y/N] " -n 1 reply
+  else
+    read -rp "Apply this update? [y/N] " -n 1 reply
+  fi
   echo ""
   if [[ ! "$reply" =~ ^[Yy]$ ]]; then
     info "Aborted."
