@@ -1,0 +1,21 @@
+README.md
+  s_4c910f9a1a7957::t_0cdcb01bb76a22 53-78,81-103,145-146
+bin/hermes-secure-update
+  s_4c910f9a1a7957::t_ddde1f7cefe880 16,44,56,73,88-99,161,232,245,250,254,261,296
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "6026f87db66a866fb03c9a0939cd2524e133972d",
+  "prompts": {},
+  "sessions": {
+    "s_4c910f9a1a7957": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f7916-c1c0-7651-b774-1ee9e4dec9fb",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "to-na <43640969+to-na@users.noreply.github.com>"
+    }
+  }
+}
