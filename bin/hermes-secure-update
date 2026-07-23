@@ -13,6 +13,7 @@
 #   --verbose       Show full commit diff in review
 #   --ai-model M    Model for AI security review (default: config or hermes default)
 #   --no-ai-review  Skip AI security review
+#   --notify        Send macOS notification + log on completion/block
 #   -h, --help      Show this help
 set -euo pipefail
 
@@ -40,6 +41,7 @@ DRY_RUN=false
 TARGET_TAG=""
 AUTO_APPROVE=false
 VERBOSE=false
+NOTIFY=false
 AI_REVIEW_OVERRIDE=""   # "" = use config; "off" = --no-ai-review
 
 while [[ $# -gt 0 ]]; do
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
     --verbose)      VERBOSE=true; shift ;;
     --ai-model)     AI_REVIEW_MODEL="$2"; shift 2 ;;
     --no-ai-review) AI_REVIEW_OVERRIDE="off"; shift ;;
+    --notify)       NOTIFY=true; shift ;;
     -h|--help)
       sed -n '2,/^set -euo/p' "$0" | grep '^#' | sed 's/^# \?//'
       exit 0
@@ -67,6 +70,7 @@ fi
 
 # ── Source library modules ───────────────────────────────────────────────────
 source "$LIB_DIR/common.sh"
+source "$LIB_DIR/notify.sh"
 source "$LIB_DIR/verify_remote.sh"
 source "$LIB_DIR/verify_signatures.sh"
 source "$LIB_DIR/risk_score.sh"
@@ -79,6 +83,18 @@ ai_review_active() {
     return 1
   fi
   [[ "$AI_REVIEW_ENABLED" == "true" ]]
+}
+
+# Send notification only when --notify is active
+maybe_notify() {
+  $NOTIFY || return 0
+  local level="$1" message="$2"
+  case "$level" in
+    ok)   notify_ok "$message" ;;
+    info) notify_info "$message" ;;
+    warn) notify_warn "$message" ;;
+    fail) notify_fail "$message" ;;
+  esac
 }
 
 # ── Main pipeline ────────────────────────────────────────────────────────────
@@ -142,6 +158,7 @@ do_fetch() {
   BEHIND=$(git -C "$HERMES_REPO" rev-list HEAD.."$TARGET_REF" --count 2>/dev/null || echo 0)
   if [[ "$BEHIND" -eq 0 ]]; then
     ok "Already up to date."
+    maybe_notify info "Already up to date."
     exit 0
   fi
 
@@ -212,6 +229,7 @@ do_review() {
     if $ai_suspicious; then
       fail "AI flagged diff as SUSPICIOUS — refusing unattended apply."
       fail "Run interactively to review: hermes-secure-update"
+      maybe_notify fail "BLOCKED: AI flagged diff as SUSPICIOUS. Manual review needed."
       exit 1
     fi
 
@@ -224,19 +242,23 @@ do_review() {
 
     if [[ "$risk_level" -gt "$block" ]]; then
       fail "Risk level $(risk_label) exceeds block threshold ($BLOCK_ABOVE). Aborting."
+      maybe_notify fail "BLOCKED: Risk $(risk_label) exceeds threshold. Manual review needed."
       exit 1
     fi
     if [[ "$risk_level" -le "$threshold" ]]; then
       ok "Auto-approved (risk $(risk_label) ≤ $AUTO_APPROVE_BELOW)."
+      maybe_notify ok "Auto-approved (risk $(risk_label)). Applying update."
       return 0
     fi
     fail "Risk $(risk_label) > auto-approve threshold ($AUTO_APPROVE_BELOW). Needs manual approval."
+    maybe_notify warn "Needs manual approval: risk $(risk_label) > $AUTO_APPROVE_BELOW."
     exit 1
   fi
 
   # Interactive approval (skip in dry-run)
   if $DRY_RUN; then
     info "Dry run — skipping approval prompt."
+    maybe_notify info "Dry run complete. No changes applied."
     return 0
   fi
 
@@ -271,6 +293,7 @@ do_apply() {
 
   echo ""
   ok "Update complete."
+  maybe_notify ok "Update applied successfully."
 }
 
 main

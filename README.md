@@ -50,7 +50,56 @@ hermes-secure-update --config /path/to/my.conf
 # AI review: pick a model, or skip it entirely
 hermes-secure-update --ai-model anthropic/claude-sonnet-4
 hermes-secure-update --no-ai-review
+
+# With macOS notification + log (for cron/launchd)
+hermes-secure-update --auto --notify
 ```
+
+## Unattended updates (cron / launchd)
+
+Phase 2 adds operational integration for gateway/cron environments.
+
+### Quick start (launchd — recommended on macOS)
+
+```bash
+# 1. Edit the plist template: replace __INSTALL_DIR__ and __HERMES_HOME__
+sed -e "s|__INSTALL_DIR__|$HOME/hermes-secure-update|g" \
+    -e "s|__HERMES_HOME__|$HOME/.hermes|g" \
+    scripts/ai.hermes.secure-update.plist > ~/Library/LaunchAgents/ai.hermes.secure-update.plist
+
+# 2. Load the agent (runs daily at 04:00)
+launchctl load ~/Library/LaunchAgents/ai.hermes.secure-update.plist
+```
+
+### Manual cron
+
+```bash
+# Add to crontab -e (daily at 04:00)
+0 4 * * * /path/to/hermes-secure-update/scripts/cron-update.sh --no-ai-review
+```
+
+### What the wrapper does
+
+`scripts/cron-update.sh` is a thin wrapper around `hermes-secure-update --auto --notify`:
+
+- **Lock file** (`~/.hermes/secure-update/cron.lock`) prevents concurrent runs
+- **Structured log** (`~/.hermes/secure-update/cron.log`) records every run
+- **macOS notification** fires on completion, block, or failure (via `--notify`)
+- Exit codes: `0` = success/up-to-date, `1` = blocked/error, `2` = lock held
+
+### Notifications
+
+The `--notify` flag enables:
+
+1. **macOS notification center** — via `osascript display notification`
+2. **Structured log** — `~/.hermes/secure-update/notify.log` (ISO-8601 | level | message)
+
+Configure in `config/default.conf`:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NOTIFY_ENABLED` | `true` | Master switch for notifications |
+| `NOTIFY_LOG` | `~/.hermes/secure-update/notify.log` | Log file path |
 
 ## Pipeline
 
@@ -93,6 +142,8 @@ Edit `config/default.conf` or set `HERMES_SECURE_UPDATE_CONFIG=/path/to/conf`.
 | `AI_REVIEW_MODEL` | *(hermes default)* | Model used for the AI review |
 | `AI_REVIEW_MAX_DIFF_CHARS` | `12000` | Diff truncation limit sent to the AI |
 | `AI_BLOCK_ON_SUSPICIOUS` | `true` | Block `--auto` when AI flags SUSPICIOUS |
+| `NOTIFY_ENABLED` | `true` | Enable macOS notifications + log (`--notify`) |
+| `NOTIFY_LOG` | `~/.hermes/secure-update/notify.log` | Notification log path |
 
 Known maintainer emails: `config/maintainers.txt` (one per line).
 

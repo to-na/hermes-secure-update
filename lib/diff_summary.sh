@@ -6,7 +6,7 @@ show_diff_summary() {
   local verbose="$3"
 
   echo "── Commit log ──"
-  git -C "$repo" log --format="  %h %G? %an: %s" HEAD.."$target_ref" | head -30
+  git -C "$repo" log -n 30 --format="  %h %G? %an: %s" HEAD.."$target_ref"
 
   local total_commits
   total_commits=$(git -C "$repo" rev-list HEAD.."$target_ref" --count)
@@ -34,7 +34,7 @@ show_diff_summary() {
   pyproject_diff=$(git -C "$repo" diff HEAD.."$target_ref" -- pyproject.toml 2>/dev/null || true)
   if [[ -n "$pyproject_diff" ]]; then
     echo "  pyproject.toml modified:"
-    echo "$pyproject_diff" | grep '^[+-]' | grep -v '^[+-][+-][+-]' | head -10 | sed 's/^/    /'
+    echo "$pyproject_diff" | grep '^[+-]' | grep -v '^[+-][+-][+-]' | sed -n '1,10p' | sed 's/^/    /'
   fi
 
   local install_diff

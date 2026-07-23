@@ -17,6 +17,7 @@ uninstall:
 test:
 	@bash tests/test_verify_remote.sh
 	@bash tests/test_risk_score.sh
+	@bash tests/test_notify.sh
 	@echo ""
 	@echo "✓ All tests passed."
 
