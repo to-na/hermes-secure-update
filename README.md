@@ -47,6 +47,17 @@ hermes-secure-update --verbose
 # Custom config
 hermes-secure-update --config /path/to/my.conf
 
+# Update to a specific tag
+hermes-secure-update --tag v2026.7.20
+
+# Update to any git ref (tag, branch, or commit SHA)
+hermes-secure-update --ref main
+hermes-secure-update --ref v2026.7.20
+hermes-secure-update --ref abc1234
+
+# List available tags and branches
+hermes-secure-update --list-refs
+
 # AI review: pick a model, or skip it entirely
 hermes-secure-update --ai-model anthropic/claude-sonnet-4
 hermes-secure-update --no-ai-review

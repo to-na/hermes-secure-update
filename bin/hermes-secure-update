@@ -8,6 +8,8 @@
 # Options:
 #   --dry-run       Fetch + verify + review only; do not apply
 #   --tag TAG       Update to a specific tag instead of main HEAD
+#   --ref REF       Update to any git ref (tag, branch, or commit SHA)
+#   --list-refs     List available tags and remote branches, then exit
 #   --auto          Skip approval prompt (for cron/gateway; respects risk threshold)
 #   --config FILE   Use alternate config file
 #   --verbose       Show full commit diff in review
@@ -38,7 +40,9 @@ AI_BLOCK_ON_SUSPICIOUS="true"
 
 # ── Parse args ───────────────────────────────────────────────────────────────
 DRY_RUN=false
-TARGET_TAG=""
+USER_REF=""
+REF_TYPE=""
+LIST_REFS=false
 AUTO_APPROVE=false
 VERBOSE=false
 NOTIFY=false
@@ -47,7 +51,8 @@ AI_REVIEW_OVERRIDE=""   # "" = use config; "off" = --no-ai-review
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)      DRY_RUN=true; shift ;;
-    --tag)          TARGET_TAG="$2"; shift 2 ;;
+    --tag|--ref)    USER_REF="$2"; shift 2 ;;
+    --list-refs)    LIST_REFS=true; shift ;;
     --auto)         AUTO_APPROVE=true; shift ;;
     --config)       CONFIG_FILE="$2"; shift 2 ;;
     --verbose)      VERBOSE=true; shift ;;
@@ -99,6 +104,12 @@ maybe_notify() {
 
 # ── Main pipeline ────────────────────────────────────────────────────────────
 main() {
+  # --list-refs: show available refs and exit
+  if $LIST_REFS; then
+    do_list_refs
+    exit 0
+  fi
+
   info "hermes-secure-update"
   echo ""
 
@@ -143,16 +154,31 @@ do_fetch() {
   verify_remote "$HERMES_REPO" "$EXPECTED_REMOTE_PATTERN"
 
   info "Fetching from origin..."
-  if [[ -n "$TARGET_TAG" ]]; then
+  if [[ -n "$USER_REF" ]]; then
+    # Fetch tags + all remote branches so any ref can be resolved
     git -C "$HERMES_REPO" fetch origin --tags --quiet 2>/dev/null || true
-    if ! git -C "$HERMES_REPO" rev-parse "$TARGET_TAG" &>/dev/null; then
-      fail "Tag '$TARGET_TAG' not found."
+    git -C "$HERMES_REPO" fetch origin --quiet 2>/dev/null || true
+
+    # Resolve the user-supplied ref
+    if git -C "$HERMES_REPO" rev-parse "refs/tags/$USER_REF" &>/dev/null; then
+      TARGET_REF="refs/tags/$USER_REF"
+      REF_TYPE="tag"
+    elif git -C "$HERMES_REPO" rev-parse "origin/$USER_REF" &>/dev/null; then
+      TARGET_REF="origin/$USER_REF"
+      REF_TYPE="branch"
+    elif git -C "$HERMES_REPO" rev-parse "$USER_REF" &>/dev/null; then
+      # Commit SHA or other resolvable ref
+      TARGET_REF="$USER_REF"
+      REF_TYPE="sha"
+    else
+      fail "Ref '$USER_REF' not found (tried tag, branch, SHA)."
       exit 1
     fi
-    TARGET_REF="$TARGET_TAG"
+    info "Target: $USER_REF ($REF_TYPE)"
   else
     git -C "$HERMES_REPO" fetch origin main --quiet
     TARGET_REF="origin/main"
+    REF_TYPE="branch"
   fi
 
   BEHIND=$(git -C "$HERMES_REPO" rev-list HEAD.."$TARGET_REF" --count 2>/dev/null || echo 0)
@@ -171,8 +197,8 @@ do_verify() {
   verify_signatures "$HERMES_REPO" "$TARGET_REF" "$KNOWN_MAINTAINERS_FILE"
 
   # L3: Tag signature (if updating to a tag)
-  if [[ -n "$TARGET_TAG" ]]; then
-    verify_tag_signature "$HERMES_REPO" "$TARGET_TAG"
+  if [[ "$REF_TYPE" == "tag" ]]; then
+    verify_tag_signature "$HERMES_REPO" "$USER_REF"
   fi
 
   # L4: Risk scoring
@@ -276,24 +302,55 @@ do_review() {
   fi
 }
 
-# ── Phase 4: Apply ───────────────────────────────────────────────────────────
+# ── Phase 5: Apply ───────────────────────────────────────────────────────────
 do_apply() {
   info "Applying update via hermes update..."
   echo ""
 
-  if [[ -n "$TARGET_TAG" ]]; then
-    # Tag-pinned update: checkout tag, then let hermes update handle deps
-    git -C "$HERMES_REPO" checkout "$TARGET_TAG" --quiet
-    info "Checked out tag $TARGET_TAG. Running dependency sync..."
-    # hermes update will detect the checkout and sync deps
-    hermes update --yes
-  else
-    hermes update --yes
-  fi
+  case "$REF_TYPE" in
+    tag|sha)
+      # Detached checkout to a specific tag or commit, then sync deps
+      git -C "$HERMES_REPO" checkout "$TARGET_REF" --quiet
+      info "Checked out $USER_REF ($REF_TYPE). Running dependency sync..."
+      hermes update --yes
+      ;;
+    branch)
+      if [[ -n "$USER_REF" ]]; then
+        # Non-default branch: checkout tracking branch, then sync
+        git -C "$HERMES_REPO" checkout -B "$USER_REF" "$TARGET_REF" --quiet
+        info "Checked out branch $USER_REF. Running dependency sync..."
+        hermes update --yes
+      else
+        # Default: origin/main via hermes update
+        hermes update --yes
+      fi
+      ;;
+  esac
 
   echo ""
   ok "Update complete."
   maybe_notify ok "Update applied successfully."
+}
+
+# ── List available refs ──────────────────────────────────────────────────────
+do_list_refs() {
+  if [[ ! -d "$HERMES_REPO/.git" ]]; then
+    fail "Not a git repository: $HERMES_REPO"
+    exit 1
+  fi
+
+  git -C "$HERMES_REPO" fetch origin --tags --quiet 2>/dev/null || true
+  git -C "$HERMES_REPO" fetch origin --quiet 2>/dev/null || true
+
+  echo "── Tags (latest 20) ──"
+  git -C "$HERMES_REPO" tag --sort=-creatordate | sed -n '1,20p' | sed 's/^/  /'
+
+  echo ""
+  echo "── Remote branches ──"
+  git -C "$HERMES_REPO" branch -r --sort=-committerdate | sed -n '1,20p' | sed 's/^/  /'
+
+  echo ""
+  info "Usage: hermes-secure-update --ref <tag|branch|sha>"
 }
 
 main
