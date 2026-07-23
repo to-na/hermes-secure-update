@@ -80,12 +80,15 @@ launchctl load ~/Library/LaunchAgents/ai.hermes.secure-update.plist
 
 ### What the wrapper does
 
-`scripts/cron-update.sh` is a thin wrapper around `hermes-secure-update --auto --notify`:
+`scripts/cron-update.sh` is a thin wrapper around `hermes-secure-update --dry-run --notify`:
 
+- **Check only, never applies** — runs fetch → verify → AI review, then stops
 - **Lock file** (`~/.hermes/secure-update/cron.lock`) prevents concurrent runs
 - **Structured log** (`~/.hermes/secure-update/cron.log`) records every run
-- **macOS notification** fires on completion, block, or failure (via `--notify`)
-- Exit codes: `0` = success/up-to-date, `1` = blocked/error, `2` = lock held
+- **macOS notification** fires with the result (via `--notify`)
+- Exit codes: `0` = up-to-date or check complete, `1` = error, `2` = lock held
+
+Apply manually when convenient: `hermes-secure-update`
 
 ### Notifications
 

@@ -3,7 +3,7 @@
 #
 # Features:
 #   - Lock file prevents concurrent runs
-#   - Runs hermes-secure-update --auto --notify
+#   - Runs hermes-secure-update --dry-run --notify (check only, never applies)
 #   - Logs to ~/.hermes/secure-update/cron.log
 #   - Exit codes: 0 = success/up-to-date, 1 = blocked/error, 2 = lock held
 #
@@ -38,9 +38,9 @@ echo $$ > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
 # ── Run ───────────────────────────────────────────────────────────────────────
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | START   | hermes-secure-update --auto --notify $*" >> "$CRON_LOG"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | START   | hermes-secure-update --dry-run --notify $*" >> "$CRON_LOG"
 
-if bash "$TOOL" --auto --notify "$@" >> "$CRON_LOG" 2>&1; then
+if bash "$TOOL" --dry-run --notify "$@" >> "$CRON_LOG" 2>&1; then
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | DONE    | Update completed or already up to date" >> "$CRON_LOG"
   exit 0
 else
