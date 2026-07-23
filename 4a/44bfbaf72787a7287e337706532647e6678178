@@ -1,0 +1,39 @@
+Makefile
+  s_9dec9c2606d3cb::t_d206d5983af164 1-24
+README.md
+  s_9dec9c2606d3cb::t_6a67af8737b826 1-88
+bin/hermes-secure-update
+  s_9dec9c2606d3cb::t_7b7a75097b2f9d 1-202
+config/default.conf
+  s_9dec9c2606d3cb::t_0e32203313ada1 1-24
+config/maintainers.txt
+  s_9dec9c2606d3cb::t_de6aa81dd7e6cf 1-13
+lib/common.sh
+  s_9dec9c2606d3cb::t_96750c39949d2b 1-32
+lib/diff_summary.sh
+  s_9dec9c2606d3cb::t_328eeff70cde9a 1-54
+lib/risk_score.sh
+  s_9dec9c2606d3cb::t_03e574d01086c5 1-57
+lib/verify_remote.sh
+  s_9dec9c2606d3cb::t_647cce821309c4 1-24
+lib/verify_signatures.sh
+  s_9dec9c2606d3cb::t_8f3b174b0a25cd 1-84
+tests/test_verify_remote.sh
+  s_9dec9c2606d3cb::t_b9e0b0583c4d23 1-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "4a44bfbaf72787a7287e337706532647e6678178",
+  "prompts": {},
+  "sessions": {
+    "s_9dec9c2606d3cb": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f8c75-144f-7ef0-a432-0bcae247e9be",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "to-na <43640969+to-na@users.noreply.github.com>"
+    }
+  }
+}
